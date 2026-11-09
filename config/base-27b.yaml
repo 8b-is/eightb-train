@@ -1,0 +1,61 @@
+# 8b-is sovereign 27B hybrid — QLoRA SFT + p/q ternary seal
+# Mirrors PeetPedro/qwen4_exp-8b-... at 27B scale. Run on train.8b.is (A6000 48 GiB).
+
+run_name: eightb-27b-kompress-ultra
+# NOTE: train from the *dense* base, not the GGUF. DavidAU's repo is an inference-only
+# GGUF (llama.cpp). QLoRA needs the full-precision HF weights of the same lineage:
+base_model: Qwen/Qwen3.8-27B
+# DavidAU reference used for eval-only parity: DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF
+target_repo: PeetPedro/qwen4_exp-27b-obliterated-abliterated-kompress-ultra
+output_dir: /workspace/out/eightb-27b
+
+# 11 PeetPedro datasets, weighted. Pure-text SFT; vision/voice lanes are stubbed
+# (see README) — add image/audio columns + a Processor when those datacards land.
+datasets:
+  - { path: PeetPedro/ultrawhale-dogfood,        split: train, weight: 3, text_field: text }
+  - { path: PeetPedro/kompress-v8,               split: train, weight: 2, text_field: text }
+  - { path: PeetPedro/sovereign-reasoning,       split: train, weight: 2, text_field: messages }
+  - { path: PeetPedro/code-gaia,                 split: train, weight: 2, text_field: messages }
+  - { path: PeetPedro/herman-melville,           split: train, weight: 1, text_field: text }
+  - { path: PeetPedro/dsp-audio-captions,        split: train, weight: 1, text_field: text }
+  - { path: PeetPedro/vision-ocr-pairs,          split: train, weight: 1, text_field: text }
+  - { path: PeetPedro/pq-ternary-proofs,         split: train, weight: 1, text_field: text }
+  - { path: PeetPedro/ayedot-selfhost,           split: train, weight: 1, text_field: text }
+  - { path: PeetPedro/espnow-telemetry,          split: train, weight: 1, text_field: text }
+  - { path: PeetPedro/sovereign-library,         split: train, weight: 1, text_field: text }
+
+# QLoRA (fits 27B on a single 48 GiB card with 4-bit NF4 base + LoRA adapters).
+quant:
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 64
+  alpha: 128
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+sft:
+  max_seq_length: 8192
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.0001
+  num_train_epochs: 3
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+  logging_steps: 10
+  save_steps: 200
+  gradient_checkpointing: true
+  bf16: true
+  optim: paged_adamw_8bit
+  packing: false
+
+# Post-training exact p/q ternary weight-deck seal (WUKONG style).
+pq_seal:
+  group_size: 128           # group-wise L2-optimal ternary quantization
+  threshold_factor: 0.68    # tau0 = 0.68 * mean(|w|)
+  refinement_steps: 2       # Lloyd-Max coordinate descent
+  gate: 0x62                # 64B@0x62 LitanyWireFrame gate
+  qt: 0x55                  # alternating quantization bitplane mask
