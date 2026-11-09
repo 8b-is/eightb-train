@@ -34,7 +34,7 @@ uv run pqseal.py  --weights x --out /tmp/deck --dry-run
 bash scripts/run_a6000.sh config/base-27b.yaml
 # or:
 make sft      # QLoRA SFT
-make seal MERGED_WEIGHTS=/workspace/out/eightb-27b/merged.safetensors
+make seal MERGED_WEIGHTS=/workspace/out/eightb-27b/merged/*.safetensors
 ```
 
 ## Files
@@ -43,9 +43,10 @@ make seal MERGED_WEIGHTS=/workspace/out/eightb-27b/merged.safetensors
 |------|------|
 | `config/base-27b.yaml` | Base model, 11-dataset weighted mix, QLoRA + SFT + `pq_seal` params |
 | `train.py` | 4-bit NF4 QLoRA SFT (transformers + peft), chat-template aware, HF push |
+| `merge_adapter.py` | Fold the LoRA adapter back into the bf16 base -> `merged/*.safetensors` |
 | `pqseal.py` | Exact `p/q` group-wise ternary quantizer + SPQT `base-243` pack + `64B@0x62` seal |
-| `scripts/run_a6000.sh` | GPU driver (nvidia-smi check → SFT → seal) |
-| `Makefile` | `dry` / `sft` / `seal` targets |
+| `scripts/run_a6000.sh` | GPU driver: nvidia-smi → SFT → merge → seal (end-to-end) |
+| `Makefile` | `dry` / `sft` / `merge` / `seal` / `e2e` targets |
 
 ## p/q seal invariants
 
