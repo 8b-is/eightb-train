@@ -43,8 +43,13 @@ def format_example(ex: dict, text_field: str, tokenizer) -> str:
     return ex.get(text_field) or ex.get("text") or ex.get("content") or ""
 
 
-def build_mixture(cfg: dict, tokenizer, seed: int):
-    """Load + weight-sample the dataset mix into one interleaved list of strings."""
+def build_mixture(cfg: dict, tokenizer, seed: int, processor=None):
+    """Load + weight-sample the dataset mix into one interleaved dataset.
+
+    When ``processor`` is None this is the text lane (rows are ``{"__text"}``).
+    With a multimodal ``processor`` rows carry ``__text`` plus optional
+    ``__image`` / ``__audio`` for the vision/voice lanes.
+    """
     from datasets import load_dataset, concatenate_datasets
 
     rng = random.Random(seed)
@@ -52,8 +57,13 @@ def build_mixture(cfg: dict, tokenizer, seed: int):
     for spec in cfg["datasets"]:
         ds = load_dataset(spec["path"], split=spec.get("split", "train"))
         tf = spec.get("text_field", "text")
-        ds = ds.map(lambda ex, tf=tf: {"__text": format_example(ex, tf, tokenizer)},
-                    remove_columns=ds.column_names)
+        if processor is None:
+            ds = ds.map(lambda ex, tf=tf: {"__text": format_example(ex, tf, tokenizer)},
+                        remove_columns=ds.column_names)
+        else:
+            import mm
+            ds = ds.map(lambda ex, tf=tf: mm.format_multimodal(ex, tf, processor),
+                        remove_columns=ds.column_names)
         ds = ds.filter(lambda ex: bool(ex["__text"] and ex["__text"].strip()))
         # Repeat by weight so the concatenation respects the mixture ratio.
         for _ in range(int(spec.get("weight", 1))):
@@ -77,6 +87,8 @@ def main(argv: list[str]) -> int:
     if args.dry_run:
         # Validate the mixture math without touching CUDA.
         total_w = sum(int(d.get("weight", 1)) for d in cfg["datasets"])
+        import mm as _mm
+        print(f"[eightb-train] modality = {_mm.resolve_modality(cfg)}")
         print(f"[eightb-train] mixture weight total = {total_w}")
         for name in ("torch", "transformers", "peft", "datasets", "bitsandbytes", "trl"):
             try:
@@ -99,11 +111,21 @@ def main(argv: list[str]) -> int:
     )
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
+    import mm
+
     seed = 0x8B15
     random.seed(seed)
     torch.manual_seed(seed)
 
-    tok = AutoTokenizer.from_pretrained(cfg["base_model"], trust_remote_code=True)
+    modality = mm.resolve_modality(cfg)
+    max_len = cfg["sft"]["max_seq_length"]
+
+    # Multimodal (vision/voice) uses an AutoProcessor; text stays on AutoTokenizer.
+    processor = mm.load_processor(cfg["base_model"]) if modality != "text" else None
+    if processor is not None:
+        tok = processor.tokenizer
+    else:
+        tok = AutoTokenizer.from_pretrained(cfg["base_model"], trust_remote_code=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
@@ -128,15 +150,20 @@ def main(argv: list[str]) -> int:
     ))
     model.print_trainable_parameters()
 
-    mixed, _ = build_mixture(cfg, tok, seed)
-    max_len = cfg["sft"]["max_seq_length"]
+    mixed, _ = build_mixture(cfg, tok, seed, processor=processor)
 
-    def tokenize(batch):
-        out = tok(batch["__text"], truncation=True, max_length=max_len)
-        out["labels"] = [ids[:] for ids in out["input_ids"]]
-        return out
+    if processor is not None:
+        # Multimodal rows already carry __text/__image/__audio; the processor collates.
+        train_ds = mixed
+        collator = mm.MultimodalCollator(processor, max_len)
+    else:
+        def tokenize(batch):
+            out = tok(batch["__text"], truncation=True, max_length=max_len)
+            out["labels"] = [ids[:] for ids in out["input_ids"]]
+            return out
 
-    tok_ds = mixed.map(tokenize, batched=True, remove_columns=mixed.column_names)
+        train_ds = mixed.map(tokenize, batched=True, remove_columns=mixed.column_names)
+        collator = DataCollatorForLanguageModeling(tok, mlm=False)
 
     s = cfg["sft"]
     targs = TrainingArguments(
@@ -158,8 +185,8 @@ def main(argv: list[str]) -> int:
     trainer = Trainer(
         model=model,
         args=targs,
-        train_dataset=tok_ds,
-        data_collator=DataCollatorForLanguageModeling(tok, mlm=False),
+        train_dataset=train_ds,
+        data_collator=collator,
     )
     trainer.train()
 

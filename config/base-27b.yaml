@@ -2,6 +2,8 @@
 # Mirrors PeetPedro/qwen4_exp-8b-... at 27B scale. Run on train.8b.is (A6000 48 GiB).
 
 run_name: eightb-27b-kompress-ultra
+# text | vision | audio | multimodal (see mm.py + README)
+modality: text
 # NOTE: train from the *dense* base, not the GGUF. DavidAU's repo is an inference-only
 # GGUF (llama.cpp). QLoRA needs the full-precision HF weights of the same lineage:
 base_model: Qwen/Qwen3.8-27B

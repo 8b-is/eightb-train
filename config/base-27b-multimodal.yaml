@@ -1,0 +1,18 @@
+# Vision + voice lane example. Requires a MULTIMODAL base (Qwen-VL / Qwen-Audio
+# lineage) and real image/audio datacards. Slugs below are placeholders.
+modality: multimodal
+run_name: eightb-27b-mm
+base_model: Qwen/Qwen3.8-27B-VL          # replace with your dense multimodal 27B id
+target_repo: PeetPedro/qwen4_exp-27b-mm
+output_dir: /workspace/out/eightb-27b-mm
+datasets:
+  # text lane
+  - { path: PeetPedro/ultrawhale-dogfood, split: train, weight: 2, text_field: text }
+  # vision lane (row must expose `image` + a caption/text field)
+  - { path: PeetPedro/vision-ocr-pairs,   split: train, weight: 2, text_field: text }
+  # audio lane (row must expose `audio` + transcript/text field)
+  - { path: PeetPedro/dsp-audio-captions, split: train, weight: 2, text_field: text }
+quant: { load_in_4bit: true, bnb_4bit_quant_type: nf4, bnb_4bit_compute_dtype: bfloat16, bnb_4bit_use_double_quant: true }
+lora: { r: 64, alpha: 128, dropout: 0.05, target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj] }
+sft: { max_seq_length: 8192, per_device_train_batch_size: 1, gradient_accumulation_steps: 16, learning_rate: 0.0001, num_train_epochs: 3, warmup_ratio: 0.03, lr_scheduler_type: cosine, logging_steps: 10, save_steps: 200, gradient_checkpointing: true, bf16: true, optim: paged_adamw_8bit, packing: false }
+pq_seal: { group_size: 128, threshold_factor: 0.68, refinement_steps: 2, gate: 0x62, qt: 0x55 }
